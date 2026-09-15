@@ -1335,8 +1335,14 @@ function requireDashboardAuth(req, res, next) {
   if (req.path === "/healthz" || req.path === "/setup/healthz") return next();
   if (req.path.startsWith("/hooks")) return next(); // allow OpenClaw webhook endpoints to bypass dashboard auth
   if (!SETUP_PASSWORD) return next(); // no password configured → open
-  const header = req.headers.authorization || "";
+    const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
+  // The Control UI calls gateway APIs (like user avatars) with the gateway
+  // token as Bearer. Let a valid gateway token through so the browser does
+  // not pop a second basic-auth prompt over the working dashboard.
+  if (scheme === "Bearer" && OPENCLAW_GATEWAY_TOKEN && encoded === OPENCLAW_GATEWAY_TOKEN) {
+    return next();
+  }
   if (scheme !== "Basic" || !encoded) {
     res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
     return res.status(401).send("Auth required");
