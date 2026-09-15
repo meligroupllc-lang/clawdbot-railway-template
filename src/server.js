@@ -1352,6 +1352,13 @@ function requireDashboardAuth(req, res, next) {
   if (scheme === "Bearer" && OPENCLAW_GATEWAY_TOKEN && encoded === OPENCLAW_GATEWAY_TOKEN) {
     return next();
   }
+  // Never challenge requests that cannot be interactive logins: a stale Bearer
+  // token stored by the Control UI, or the service-worker update fetch (sent
+  // without Authorization). A bare 401 lets the UI continue on its working
+  // WebSocket instead of looping the browser's native auth dialog.
+  if (scheme === "Bearer" || (req.path === "/sw.js" && !encoded)) {
+    return res.status(401).send("Invalid token");
+  }
   if (scheme !== "Basic" || !encoded) {
     res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
     return res.status(401).send("Auth required");
