@@ -296,6 +296,15 @@ function requireSetupAuth(req, res, next) {
 }
 
 const app = express();
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    if (res.statusCode === 401) {
+      const h = req.headers.authorization || "";
+      console.log(`[auth401] ${req.method} ${req.path} scheme=${h.split(" ")[0] || "none"} credLen=${(h.split(" ")[1] || "").length}`);
+    }
+  });
+  next();
+});
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
 
