@@ -74,6 +74,7 @@ process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
 // Optional bridge for webhook senders that cannot set custom headers (for example Odoo).
 // The long random path segment is the sender credential; the gateway hook token stays server-side.
 const ODOO_HOOK_PATH_SECRET = process.env.ODOO_HOOK_PATH_SECRET?.trim();
+const ODOO_DISCUSS_HOOK_PATH_SECRET = process.env.ODOO_DISCUSS_HOOK_PATH_SECRET?.trim();
 const OPENCLAW_HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN?.trim();
 
 // Where the gateway will listen internally (we proxy to it).
@@ -1365,7 +1366,39 @@ app.post("/odoo-approved/:secret", async (req, res) => {
   req.body = {
     message: `Odoo Approved-stage event: ${JSON.stringify(req.body ?? {})}`,
     name: "Odoo Approved",
-    agentId: "revenue-pipeline",
+    agentId: "odoo-assistant",
+    deliver: false,
+  };
+  delete req.headers["content-length"];
+  return proxy.web(req, res, {
+    target: GATEWAY_TARGET,
+    buffer: Readable.from([JSON.stringify(req.body)]),
+  });
+});
+
+// Bridge Odoo Discuss messages to the Odoo assistant. This has a dedicated
+// secret and payload so it remains isolated from the Approved-stage pitch flow.
+app.post("/odoo-discuss/:secret", async (req, res) => {
+  if (
+    !ODOO_DISCUSS_HOOK_PATH_SECRET ||
+    !OPENCLAW_HOOK_TOKEN ||
+    req.params.secret !== ODOO_DISCUSS_HOOK_PATH_SECRET
+  ) {
+    return res.status(404).send("Not found");
+  }
+  if (!isConfigured()) return res.status(503).send("Gateway not configured");
+  try {
+    await ensureGatewayRunning();
+  } catch {
+    return res.status(503).send("Gateway unavailable");
+  }
+  req.url = "/hooks/agent";
+  req.headers.authorization = `Bearer ${OPENCLAW_HOOK_TOKEN}`;
+  req.headers["content-type"] = "application/json";
+  req.body = {
+    message: `Odoo Discuss message event. Reply in the same Odoo thread as slinqy_agents using the Odoo API. Preserve the model/res_id/thread context from this event. Event: ${JSON.stringify(req.body ?? {})}`,
+    name: "Odoo Discuss",
+    agentId: "odoo-assistant",
     deliver: false,
   };
   delete req.headers["content-length"];
