@@ -1498,7 +1498,11 @@ const server = app.listen(PORT, "0.0.0.0", async () => {
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.mode", "token"]));
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]));
       await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "gateway.remote.token", OPENCLAW_GATEWAY_TOKEN]));
-      console.log("[wrapper] gateway tokens synced");
+      if (OPENCLAW_HOOK_TOKEN) {
+        await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "hooks.enabled", "true"]));
+        await runCmd(OPENCLAW_NODE, clawArgs(["config", "set", "hooks.token", OPENCLAW_HOOK_TOKEN]));
+      }
+      console.log("[wrapper] gateway tokens and hooks synced");
     } catch (err) {
       console.warn(`[wrapper] failed to sync gateway tokens: ${String(err)}`);
     }
