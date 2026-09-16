@@ -1365,7 +1365,7 @@ app.post("/odoo-approved/:secret", async (req, res) => {
   req.body = {
     message: `Odoo Approved-stage event: ${JSON.stringify(req.body ?? {})}`,
     name: "Odoo Approved",
-    agentId: "main",
+    agentId: "revenue-pipeline",
     deliver: false,
   };
   delete req.headers["content-length"];
