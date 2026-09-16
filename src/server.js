@@ -6,6 +6,7 @@ import path from "node:path";
 
 import express from "express";
 import httpProxy from "http-proxy";
+import { Readable } from "node:stream";
 import * as tar from "tar";
 
 // Migrate deprecated CLAWDBOT_* env vars → OPENCLAW_* so existing Railway deployments
@@ -1368,7 +1369,10 @@ app.post("/odoo-approved/:secret", async (req, res) => {
     deliver: false,
   };
   delete req.headers["content-length"];
-  return proxy.web(req, res, { target: GATEWAY_TARGET, buffer: Buffer.from(JSON.stringify(req.body)) });
+  return proxy.web(req, res, {
+    target: GATEWAY_TARGET,
+    buffer: Readable.from([JSON.stringify(req.body)]),
+  });
 });
 
 // --- Dashboard password protection ---
