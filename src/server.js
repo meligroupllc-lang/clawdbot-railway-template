@@ -70,6 +70,11 @@ function resolveGatewayToken() {
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
 
+// Optional bridge for webhook senders that cannot set custom headers (for example Odoo).
+// The long random path segment is the sender credential; the gateway hook token stays server-side.
+const ODOO_HOOK_PATH_SECRET = process.env.ODOO_HOOK_PATH_SECRET?.trim();
+const OPENCLAW_HOOK_TOKEN = process.env.OPENCLAW_HOOK_TOKEN?.trim();
+
 // Where the gateway will listen internally (we proxy to it).
 const INTERNAL_GATEWAY_PORT = Number.parseInt(process.env.INTERNAL_GATEWAY_PORT ?? "18789", 10);
 const INTERNAL_GATEWAY_HOST = process.env.INTERNAL_GATEWAY_HOST ?? "127.0.0.1";
@@ -1337,6 +1342,35 @@ proxy.on("error", (err, _req, res) => {
   }
 });
 
+// Bridge Odoo's headerless webhook action to OpenClaw's authenticated hook endpoint.
+// Match the secret path exactly, before dashboard auth and before the general proxy.
+app.post("/odoo-approved/:secret", async (req, res) => {
+  if (
+    !ODOO_HOOK_PATH_SECRET ||
+    !OPENCLAW_HOOK_TOKEN ||
+    req.params.secret !== ODOO_HOOK_PATH_SECRET
+  ) {
+    return res.status(404).send("Not found");
+  }
+  if (!isConfigured()) return res.status(503).send("Gateway not configured");
+  try {
+    await ensureGatewayRunning();
+  } catch {
+    return res.status(503).send("Gateway unavailable");
+  }
+  req.url = "/hooks/agent";
+  req.headers.authorization = `Bearer ${OPENCLAW_HOOK_TOKEN}`;
+  req.headers["content-type"] = "application/json";
+  req.body = {
+    message: `Odoo Approved-stage event: ${JSON.stringify(req.body ?? {})}`,
+    name: "Odoo Approved",
+    agentId: "main",
+    deliver: false,
+  };
+  delete req.headers["content-length"];
+  return proxy.web(req, res, { target: GATEWAY_TARGET, buffer: Buffer.from(JSON.stringify(req.body)) });
+});
+
 // --- Dashboard password protection ---
 // Require the same SETUP_PASSWORD for the entire Control UI dashboard,
 // not just the /setup routes.  Healthcheck is excluded so Railway probes work.
@@ -1378,7 +1412,8 @@ function requireDashboardAuth(req, res, next) {
 // cannot set custom Authorization headers for WebSocket connections, so we inject
 // the token into proxied requests at the wrapper level.
 function attachGatewayAuthHeader(req) {
-  // Always overwrite: the browser's cached Basic header must not reach the gateway.
+  // Preserve the dedicated hooks token. All other proxied traffic uses gateway auth.
+  if (req.url?.startsWith("/hooks")) return;
   if (OPENCLAW_GATEWAY_TOKEN) {
     req.headers.authorization = `Bearer ${OPENCLAW_GATEWAY_TOKEN}`;
   }
