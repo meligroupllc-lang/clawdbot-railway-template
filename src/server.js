@@ -1415,25 +1415,73 @@ app.post("/odoo-discuss/:secret", async (req, res) => {
 });
 
 // --- Dashboard password protection ---
+// A successful Basic login mints a signed session cookie. The cookie lets the
+// Control UI load same-origin assets and APIs that either omit Authorization or
+// use OpenClaw's gateway Bearer token without triggering another Basic prompt.
+const DASHBOARD_SESSION_COOKIE = "openclaw_dashboard_session";
+const DASHBOARD_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+
+function dashboardSessionSignature(payload) {
+  return crypto.createHmac("sha256", SETUP_PASSWORD).update(payload).digest("base64url");
+}
+
+function createDashboardSession(nowMs = Date.now()) {
+  const expiresAt = Math.floor(nowMs / 1000) + DASHBOARD_SESSION_TTL_SECONDS;
+  const payload = `v1.${expiresAt}`;
+  return `${payload}.${dashboardSessionSignature(payload)}`;
+}
+
+function hasValidDashboardSession(req, nowMs = Date.now()) {
+  const cookieHeader = req.headers.cookie || "";
+  const rawCookie = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${DASHBOARD_SESSION_COOKIE}=`));
+  if (!rawCookie) return false;
+
+  let value;
+  try {
+    value = decodeURIComponent(rawCookie.slice(DASHBOARD_SESSION_COOKIE.length + 1));
+  } catch {
+    return false;
+  }
+  const [version, expiresAtRaw, signature] = value.split(".");
+  if (version !== "v1" || !/^\d+$/.test(expiresAtRaw || "") || !signature) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(nowMs / 1000)) return false;
+
+  const payload = `${version}.${expiresAtRaw}`;
+  const expected = dashboardSessionSignature(payload);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function setDashboardSessionCookie(res) {
+  const value = createDashboardSession();
+  res.append(
+    "Set-Cookie",
+    `${DASHBOARD_SESSION_COOKIE}=${encodeURIComponent(value)}; Max-Age=${DASHBOARD_SESSION_TTL_SECONDS}; Path=/; HttpOnly; Secure; SameSite=Lax`,
+  );
+}
+
 // Require the same SETUP_PASSWORD for the entire Control UI dashboard,
-// not just the /setup routes.  Healthcheck is excluded so Railway probes work.
+// not just the /setup routes. Healthcheck is excluded so Railway probes work.
 function requireDashboardAuth(req, res, next) {
   if (req.path === "/healthz" || req.path === "/setup/healthz") return next();
   if (req.path.startsWith("/hooks")) return next(); // allow OpenClaw webhook endpoints to bypass dashboard auth
   if (!SETUP_PASSWORD) return next(); // no password configured → open
-    const header = req.headers.authorization || "";
+  if (hasValidDashboardSession(req)) return next();
+
+  const header = req.headers.authorization || "";
   const [scheme, encoded] = header.split(" ");
   // The Control UI calls gateway APIs (like user avatars) with the gateway
-  // token as Bearer. Let a valid gateway token through so the browser does
-  // not pop a second basic-auth prompt over the working dashboard.
+  // token as Bearer. Let a valid gateway token through.
   if (scheme === "Bearer" && OPENCLAW_GATEWAY_TOKEN && encoded === OPENCLAW_GATEWAY_TOKEN) {
     return next();
   }
-  // Never challenge requests that cannot be interactive logins: a stale Bearer
-  // token stored by the Control UI, or the service-worker update fetch (sent
-  // without Authorization). A bare 401 lets the UI continue on its working
-  // WebSocket instead of looping the browser's native auth dialog.
-  if (scheme === "Bearer" || (req.path === "/sw.js" && !encoded)) {
+  // A stale Bearer is an API credential failure, not an interactive login.
+  if (scheme === "Bearer") {
     return res.status(401).send("Invalid token");
   }
   if (scheme !== "Basic" || !encoded) {
@@ -1447,6 +1495,7 @@ function requireDashboardAuth(req, res, next) {
     res.set("WWW-Authenticate", 'Basic realm="OpenClaw Dashboard"');
     return res.status(401).send("Invalid password");
   }
+  setDashboardSessionCookie(res);
   return next();
 }
 
