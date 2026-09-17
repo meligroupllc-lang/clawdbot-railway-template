@@ -313,7 +313,13 @@ app.use((req, res, next) => {
   next();
 });
 app.disable("x-powered-by");
-app.use(express.json({ limit: "1mb" }));
+// Preserve raw request streams for transparent model API proxy routes.
+// http-proxy must receive the original body; parsing it here makes OpenClaw wait
+// for bytes that have already been consumed and return a request-body timeout.
+app.use((req, res, next) => {
+  if (req.path === "/v1/responses" || req.path === "/v1/chat/completions") return next();
+  return express.json({ limit: "1mb" })(req, res, next);
+});
 
 // Minimal health endpoint for Railway.
 app.get("/setup/healthz", (_req, res) => res.json({ ok: true }));
