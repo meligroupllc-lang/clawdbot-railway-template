@@ -42,6 +42,8 @@ RUN pnpm ui:install && pnpm ui:build
 # Runtime image
 FROM node:24-bookworm
 ENV NODE_ENV=production
+ENV OPENCLAW_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV OPENCLAW_BROWSER_PROFILE_DIR=/data/browser-profile
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -49,6 +51,8 @@ RUN apt-get update \
     tini \
     python3 \
     python3-venv \
+    chromium \
+    fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 
 # `openclaw update` expects pnpm. Provide it in the runtime image.
