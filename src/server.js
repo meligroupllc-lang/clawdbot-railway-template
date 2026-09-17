@@ -141,6 +141,25 @@ function isConfigured() {
   }
 })();
 
+// Boot-time config repair: strip migration markers written by newer CLIs that
+// this gateway version rejects (exit 78 "Unrecognized key" on boot).
+(function stripUnknownMigrationMarkers() {
+  try {
+    const p = configPath();
+    if (!fs.existsSync(p)) return;
+    const raw = fs.readFileSync(p, "utf8");
+    const cfg = JSON.parse(raw);
+    const mig = cfg && cfg.meta && cfg.meta.migrations;
+    if (mig && Object.prototype.hasOwnProperty.call(mig, "utilityModelSeparation")) {
+      delete mig.utilityModelSeparation;
+      fs.writeFileSync(p, JSON.stringify(cfg, null, 2), { encoding: "utf8", mode: 0o600 });
+      console.log("[wrapper] removed unsupported meta.migrations.utilityModelSeparation from config");
+    }
+  } catch (err) {
+    console.error("[wrapper] config repair skipped:", String(err));
+  }
+})();
+
 let gatewayProc = null;
 let gatewayStarting = null;
 
