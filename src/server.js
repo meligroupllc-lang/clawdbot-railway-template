@@ -160,6 +160,76 @@ function isConfigured() {
   }
 })();
 
+// Boot-time Slack dist patches: DM session + reply behavior (verified 2026-09-18).
+// /openclaw/dist is image content, so a container rebuild wipes direct edits - these
+// re-apply at every boot. Idempotent via the [patch] markers. If OpenClaw is upgraded
+// and an anchor string drifts, the patch skips and logs loudly instead of breaking boot.
+(function patchSlackDistFiles() {
+  const DIR = "/openclaw/dist/extensions/slack/.setup";
+  const jobs = [
+    {
+      // Flat DM final replies: never thread outbound final messages in D-channels.
+      prefix: "send-",
+      edits: [[
+`	const threadPayload = params.replyBroadcast && params.threadTs ? {
+		thread_ts: params.threadTs,
+		reply_broadcast: true
+	} : params.threadTs ? { thread_ts: params.threadTs } : {};`,
+`	const isDmChannel = String(params.channelId || "").startsWith("D");
+	const threadPayload = !isDmChannel && params.replyBroadcast && params.threadTs ? {
+		thread_ts: params.threadTs,
+		reply_broadcast: true
+	} : !isDmChannel && params.threadTs ? { thread_ts: params.threadTs } : {};`
+      ]]
+    },
+    {
+      // DM = one session always (threads are layout only; channels keep per-thread sessions).
+      prefix: "provider-",
+      edits: [[
+`isDirectMessage ? assistantThreadTs ?? agentViewThreadTs :`,
+`isDirectMessage ? void 0 /* [patch] dm-single-session */ :`
+      ],[
+`const runtimeBindingThreadId = routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : void 0);`,
+`const runtimeBindingThreadId = routedThreadId; // [patch] dm-single-session`
+      ]]
+    },
+    {
+      // No native progress stream in DMs (it spawned ghost threads under the user's own message).
+      prefix: "pipeline.runtime-",
+      edits: [[
+`	const start = async (update) => {
+		const streamThreadTs = replyPlan.nextThreadTs();`,
+`	const start = async (update) => {
+		if (String(message.channel || "").startsWith("D")) {
+			logVerbose("slack-stream: DM channel, native progress stream disabled [patch] dm-no-native-stream");
+			delivery.streamFailed = true;
+			return false;
+		}
+		const streamThreadTs = replyPlan.nextThreadTs();`
+      ]]
+    }
+  ];
+  for (const job of jobs) {
+    try {
+      const name = fs.readdirSync(DIR).find((n) => n.startsWith(job.prefix) && n.endsWith(".mjs"));
+      if (!name) { console.error("[wrapper] dist patch: no file with prefix", job.prefix, "in", DIR); continue; }
+      const p = DIR + "/" + name;
+      let s = fs.readFileSync(p, "utf8");
+      let changed = false;
+      for (const [from, to] of job.edits) {
+        if (s.includes(to)) continue; // already patched
+        if (!s.includes(from)) { console.error("[wrapper] dist patch anchor NOT FOUND in", name, "- OpenClaw build drifted, review needed"); continue; }
+        s = s.split(from).join(to);
+        changed = true;
+      }
+      if (changed) fs.writeFileSync(p, s, "utf8");
+      console.log("[wrapper] dist patch", changed ? "applied:" : "already present:", name);
+    } catch (err) {
+      console.error("[wrapper] dist patch failed:", job.prefix, String(err));
+    }
+  }
+})();
+
 let gatewayProc = null;
 let gatewayStarting = null;
 
