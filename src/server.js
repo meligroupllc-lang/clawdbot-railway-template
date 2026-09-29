@@ -406,7 +406,7 @@ app.disable("x-powered-by");
 // http-proxy must receive the original body; parsing it here makes OpenClaw wait
 // for bytes that have already been consumed and return a request-body timeout.
 app.use((req, res, next) => {
-  if (req.path === "/v1/responses" || req.path === "/v1/chat/completions") return next();
+  if (req.path === "/v1/responses" || req.path === "/v1/chat/completions" || req.path === "/slack/events") return next();
   return express.json({ limit: "1mb" })(req, res, next);
 });
 
@@ -1501,6 +1501,18 @@ app.post("/odoo-discuss/:secret", async (req, res) => {
     target: GATEWAY_TARGET,
     buffer: Readable.from([JSON.stringify(req.body)]),
   });
+});
+
+// Slack HTTP mode: Slack posts events here. The raw body is passed through untouched
+// (see the body parser above) because the gateway verifies Slack's request signature itself.
+app.post("/slack/events", async (req, res) => {
+  if (!isConfigured()) return res.status(503).send("Gateway not configured");
+  try {
+    await ensureGatewayRunning();
+  } catch {
+    return res.status(503).send("Gateway unavailable");
+  }
+  return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
 
 // --- Dashboard password protection ---
